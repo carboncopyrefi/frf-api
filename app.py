@@ -18,7 +18,7 @@ from schemas import (
     SubmissionCreate, SubmissionWithAnswersRead, SubmissionRead,
     EvaluationCreate, EvaluationWithAnswersRead,
     QuestionCreate, QuestionRead,
-    SubmissionAnswerRead, EvaluationAnswerRead
+    SubmissionAnswerRead, EvaluationAnswerRead, PastSubmissionSummary
 )
 
 # Model imports (for internal logic)
@@ -51,7 +51,7 @@ app = FastAPI(title="Submission Evaluation API", lifespan=lifespan)
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "https://frf-front.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -100,39 +100,45 @@ def get_category_by_slug(slug: str):
     categories_collection = get_categories_collection()
     submissions_collection = get_submissions_collection()
     evaluations_collection = get_evaluations_collection()
-    
+
     category = categories_collection.find_one({"slug": slug})
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
-    
-    submissions_cursor = submissions_collection.find({"category.slug": slug})
-    submissions = []
 
-    for submission in submissions_cursor:
-        submission_id = str(submission["id"])
-                            
-        # Get evaluation stats
-        evaluations = list(evaluations_collection.find(
-            {"submission_id": submission_id}
+    # ---  aggregation: newest submission per project  ---
+    pipeline = [
+        {"$match": {"category.slug": slug}},                       # 1. right category
+        {"$sort": {"date_completed": -1}},                         # 2. newest first
+        {"$group": {                                                # 3. one per project
+            "_id": "$project_id",
+            "submission": {"$first": "$$ROOT"}
+        }},
+        {"$replaceRoot": {"newRoot": "$submission"}}               # 4. lift submission up
+    ]
+    newest_subs = list(submissions_collection.aggregate(pipeline))
+    # --------------------------------------------------------
+
+    # enrich with evaluation counters
+    submissions_out = []
+    for sub in newest_subs:
+        sid = str(sub["id"])
+        evals = list(evaluations_collection.find(
+            {"submission_id": sid}, {"_id": 0, "date_completed": 1}
         ).sort("date_completed", -1))
 
-        last_evaluation_date = evaluations[0]["date_completed"] if evaluations else None
-        evaluation_count = len(evaluations)
-
-        submission_read = SubmissionRead(
-            id=submission_id,
-            project_id=submission["project_id"],
-            project_name=submission["project_name"],
-            karma_gap_id=submission["karma_gap_id"],
-            date_completed=submission.get("date_completed"),
-            score=submission.get("score"),
+        submissions_out.append(SubmissionRead(
+            id=sid,
+            project_id=sub["project_id"],
+            project_name=sub["project_name"],
+            karma_gap_id=sub["karma_gap_id"],
+            date_completed=sub.get("date_completed"),
+            score=sub.get("score"),
             category=category,
-            last_evaluation_date=last_evaluation_date,
-            evaluation_count=evaluation_count
-        )
-        submissions.append(submission_read)
+            last_evaluation_date=evals[0]["date_completed"] if evals else None,
+            evaluation_count=len(evals)
+        ))
 
-    return CategoryReadWithSubmissions(**category, submissions=submissions)
+    return CategoryReadWithSubmissions(**category, submissions=submissions_out)
 
 # Question Endpoints
 @app.get("/questions", response_model=List[QuestionRead])
@@ -218,6 +224,7 @@ def create_submission_with_answers(submission_data: SubmissionCreate):
 
     last_evaluation_date = None
     evaluation_count = 0
+    past_submissions = []
 
     # Convert back to proper model format
     answers_with_questions = []
@@ -243,7 +250,8 @@ def create_submission_with_answers(submission_data: SubmissionCreate):
         answers=answers_with_questions,
         category=Category(**created_submission['category']),
         last_evaluation_date=last_evaluation_date,
-        evaluation_count=evaluation_count
+        evaluation_count=evaluation_count,
+        past_submissions=past_submissions
     )
 
 @app.get("/submissions/{submission_id}", response_model=SubmissionWithAnswersRead)
@@ -302,6 +310,35 @@ async def get_submission(submission_id: str):
     except Exception as e:
         print(f"Warning: Could not fetch Karma GAP data: {e}")
     
+    current_date = submission.get("date_completed")
+    if current_date is None:            # safety – if the row has no date, return empty list
+        past_list = []
+    else:
+        past_cursor = submissions_collection.find(
+            {
+                "project_id": submission["project_id"],
+                "id": {"$ne": submission_id},          # exclude the current one
+                "date_completed": {"$lt": current_date}     # <-- only EARLIER ones
+            },
+            projection={                              # light payload
+                "_id": 0,
+                "id": 1,
+                "date_completed": 1,
+                "score": 1,
+                "category.slug": 1
+            }
+        ).sort("date_completed", -1)                 # newest first
+
+        past_list = [
+            PastSubmissionSummary(
+                id=doc["id"],
+                date_completed=doc.get("date_completed"),
+                score=doc.get("score"),
+                category_slug=doc["category"]["slug"]
+            )
+            for doc in past_cursor
+        ]
+    
     submission.pop('_id', None)
     return SubmissionWithAnswersRead(
         id=submission['id'],
@@ -314,7 +351,8 @@ async def get_submission(submission_id: str):
         category=Category(**category),
         karma_data=karma_data,
         last_evaluation_date=last_evaluation_date,
-        evaluation_count=evaluation_count
+        evaluation_count=evaluation_count,
+        past_submissions=past_list
     )
 
 # @app.get("/submissions", response_model=List[SubmissionWithAnswersRead])

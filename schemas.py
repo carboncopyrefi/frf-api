@@ -69,10 +69,17 @@ class SubmissionAnswerRead(BaseSchema):
     answer: str
     question: QuestionRead
 
+class PastSubmissionSummary(BaseModel):
+    id: str
+    date_completed: Optional[datetime]
+    score: Optional[float]
+    category_slug: str
+
 class SubmissionWithAnswersRead(SubmissionRead):
     answers: List[SubmissionAnswerRead]
     category: CategoryRead
     karma_data: Optional[KarmaData] = None
+    past_submissions: List[PastSubmissionSummary] = []
 
 # Evaluation Schemas
 class EvaluationBase(BaseSchema):
