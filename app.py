@@ -355,6 +355,36 @@ async def get_submission(submission_id: str):
         past_submissions=past_list
     )
 
+@app.get("/projects/{slug}")
+async def get_project_latest_submission(slug: str):
+    coll = get_submissions_collection()
+
+    pipeline = [
+        # 1. create the dynamic slug field
+        {"$addFields": {
+            "project_slug": {
+                "$replaceAll": {
+                    "input": {"$toLower": "$project_name"},
+                    "find": " ",
+                    "replacement": "-"
+                }
+            }
+        }},
+        # 2. keep only the wanted slug
+        {"$match": {"project_slug": slug}},
+        # 3. newest first
+        {"$sort": {"date_completed": -1}},
+        # 4. we only need one
+        {"$limit": 1}
+    ]
+
+    latest = coll.aggregate(pipeline).try_next()
+    if not latest:
+        raise HTTPException(status_code=404, detail="Project or submission not found")
+
+    # reuse the existing detail builder
+    return {"id": latest["id"]}
+
 # @app.get("/submissions", response_model=List[SubmissionWithAnswersRead])
 # def get_submissions():
 #     db = get_db()
