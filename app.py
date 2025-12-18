@@ -1,10 +1,12 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, AsyncGenerator
-import json, os, utils
+import json, os, utils, uuid
 from datetime import datetime, timezone
-import uuid
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # MongoDB imports - using pymongo directly
 from db import (
@@ -31,7 +33,7 @@ load_dotenv()
 MAX_SCORE = float(os.getenv("MAX_SCORE"))
 AGREE_SCORE = float(os.getenv("AGREE_SCORE"))
 DISAGREE_SCORE = float(os.getenv("DISAGREE_SCORE"))
-NEITHER_SCORE = float(os.getenv("NEITHER_SCORE"))
+NEUTRAL_SCORE = float(os.getenv("NEUTRAL_SCORE"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -48,6 +50,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(title="Submission Evaluation API", lifespan=lifespan)
 
+# Create a limiter — identify clients by IP
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -59,7 +66,8 @@ app.add_middleware(
 
 # Category Endpoints
 @app.post("/category", response_model=CategoryRead)
-def create_category(category: CategoryCreate):
+@limiter.limit("1/minute")
+def create_category(category: CategoryCreate, request: Request):
     db = get_db()
     categories_collection = get_categories_collection()
     
@@ -82,7 +90,8 @@ def create_category(category: CategoryCreate):
     return CategoryRead(**created_category)
 
 @app.get("/categories", response_model=List[CategoryRead])
-def get_categories():
+@limiter.limit("20/minute")
+def get_categories(request: Request):
     db = get_db()
     categories_collection = get_categories_collection()
     
@@ -95,7 +104,8 @@ def get_categories():
     return categories
 
 @app.get("/categories/{slug}", response_model=CategoryReadWithSubmissions)
-def get_category_by_slug(slug: str):
+@limiter.limit("60/minute")
+def get_category_by_slug(slug: str, request: Request):
     db = get_db()
     categories_collection = get_categories_collection()
     submissions_collection = get_submissions_collection()
@@ -142,7 +152,8 @@ def get_category_by_slug(slug: str):
 
 # Question Endpoints
 @app.get("/questions", response_model=List[QuestionRead])
-def get_questions():
+@limiter.limit("60/minute")
+def get_questions(request: Request):
     db = get_db()
     questions_collection = get_questions_collection()
     
@@ -171,7 +182,8 @@ def get_questions():
 
 # Submission Endpoints
 @app.post("/submission", response_model=SubmissionWithAnswersRead)
-def create_submission_with_answers(submission_data: SubmissionCreate):
+@limiter.limit("1/minute")
+def create_submission_with_answers(submission_data: SubmissionCreate, request: Request):
     db = get_db()
     submissions_collection = get_submissions_collection()
     categories_collection = get_categories_collection()
@@ -255,7 +267,8 @@ def create_submission_with_answers(submission_data: SubmissionCreate):
     )
 
 @app.get("/submissions/{submission_id}", response_model=SubmissionWithAnswersRead)
-async def get_submission(submission_id: str):
+@limiter.limit("20/minute")
+async def get_submission(submission_id: str, request: Request):
     db = get_db()
     submissions_collection = get_submissions_collection()
     questions_collection = get_questions_collection()
@@ -356,7 +369,8 @@ async def get_submission(submission_id: str):
     )
 
 @app.get("/projects/{slug}")
-async def get_project_latest_submission(slug: str):
+@limiter.limit("20/minute")
+async def get_project_latest_submission(slug: str, request: Request):
     coll = get_submissions_collection()
 
     pipeline = [
@@ -405,7 +419,8 @@ async def get_project_latest_submission(slug: str):
 
 # Evaluation Endpoints
 @app.post("/evaluation", response_model=EvaluationWithAnswersRead)
-def create_evaluation_with_answers(evaluation_data: EvaluationCreate):
+@limiter.limit("1/minute")
+def create_evaluation_with_answers(evaluation_data: EvaluationCreate, request: Request):
     db = get_db()
     submissions_collection = get_submissions_collection()
     evaluations_collection = get_evaluations_collection()
@@ -424,7 +439,7 @@ def create_evaluation_with_answers(evaluation_data: EvaluationCreate):
         elif answer.answer == "2":
             evaluation_score += DISAGREE_SCORE
         elif answer.answer == "3":
-            evaluation_score += NEITHER_SCORE
+            evaluation_score += NEUTRAL_SCORE
         else:
             evaluation_score = 0.0
 
@@ -512,7 +527,8 @@ def create_evaluation_with_answers(evaluation_data: EvaluationCreate):
     )
 
 @app.get("/evaluations/{evaluation_id}", response_model=EvaluationWithAnswersRead)
-def get_evaluation(evaluation_id: str):
+@limiter.limit("20/minute")
+def get_evaluation(evaluation_id: str, request: Request):
     db = get_db()
     evaluations_collection = get_evaluations_collection()
     questions_collection = get_questions_collection()
@@ -555,7 +571,8 @@ def get_evaluation(evaluation_id: str):
     )
 
 @app.get("/submissions/{submission_id}/evaluations", response_model=List[EvaluationWithAnswersRead])
-def get_evaluations_by_submission(submission_id: str):
+@limiter.limit("20/minute")
+def get_evaluations_by_submission(submission_id: str, request: Request):
     db = get_db()
     submissions_collection = get_submissions_collection()
     questions_collection = get_questions_collection()
