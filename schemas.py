@@ -31,6 +31,7 @@ class CategoryBase(BaseSchema):
     name: str
     description: Optional[str] = None
     slug: str
+    evaluators: List[str]
 
 class CategoryCreate(CategoryBase):
     pass
@@ -46,6 +47,7 @@ class SubmissionBase(BaseSchema):
     project_id: str
     project_name: str
     karma_gap_id: str
+    owner: Optional[str] = None
 
 class SubmissionAnswerCreate(BaseSchema):
     question_id: str
@@ -54,14 +56,6 @@ class SubmissionAnswerCreate(BaseSchema):
 class SubmissionCreate(SubmissionBase):
     answers: List[SubmissionAnswerCreate]
     category: str
-
-class SubmissionRead(SubmissionBase):
-    id: str
-    date_completed: Optional[datetime] = None
-    score: Optional[float] | None
-    category: CategoryRead
-    last_evaluation_date: Optional[datetime] | None
-    evaluation_count: int | None
 
 class SubmissionAnswerRead(BaseSchema):
     id: str
@@ -75,16 +69,11 @@ class PastSubmissionSummary(BaseModel):
     score: Optional[float]
     category_slug: str
 
-class SubmissionWithAnswersRead(SubmissionRead):
-    answers: List[SubmissionAnswerRead]
-    category: CategoryRead
-    karma_data: Optional[KarmaData] = None
-    past_submissions: List[PastSubmissionSummary] = []
-
 # Evaluation Schemas
 class EvaluationBase(BaseSchema):
     evaluator: str
     submission_id: str
+    evaluator: Optional[str] = None
 
 class EvaluationAnswerCreate(BaseSchema):
     question_id: str
@@ -107,5 +96,19 @@ class EvaluationAnswerRead(BaseSchema):
 class EvaluationWithAnswersRead(EvaluationRead):
     answers: List[EvaluationAnswerRead]
 
-# Update forward references
-CategoryReadWithSubmissions.model_rebuild()
+class SubmissionRead(SubmissionBase):
+    id: str
+    date_completed: Optional[datetime] = None
+    score: Optional[float] | None
+    category: CategoryRead
+    last_evaluation_date: Optional[datetime] | None
+    evaluation_count: int | None
+    evaluations: List[EvaluationRead]
+
+class SubmissionWithAnswersRead(SubmissionRead):
+    answers: List[SubmissionAnswerRead]
+    category: CategoryRead
+    karma_data: Optional[KarmaData] = None
+    past_submissions: List[PastSubmissionSummary] = []
+    owner: str
+    evaluations: List[EvaluationRead]

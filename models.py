@@ -13,6 +13,7 @@ class CategoryBase(BaseSchema):
     name: str
     description: Optional[str] = None
     slug: str
+    evaluators: List[str]
 
 class CategoryCreate(CategoryBase):
     pass
@@ -81,6 +82,7 @@ class EvaluationCreateForSubmission(BaseSchema):
 
 class SubmissionCreate(SubmissionBase):
     answers: List[SubmissionAnswerCreate]
+    owner: str
 
 class SubmissionUpdate(SubmissionBase):
     pass
@@ -94,6 +96,7 @@ class Submission(SubmissionInDBBase):
     answers: List[SubmissionAnswer] = []
     evaluations: List["Evaluation"] = []
     category: Category
+    owner: str
 
     class Config:
         from_attributes = True
