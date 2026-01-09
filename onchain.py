@@ -3,13 +3,28 @@ from typing import Dict, Optional
 from pydantic import BaseModel
 from jose import jwt, JWTError
 from eth_utils import to_checksum_address
-from db import ( get_categories_collection )
+from db import ( get_categories_collection, get_evaluations_collection )
+from eas import EAS
+from eth_utils import keccak
 
 SECRET   = os.getenv("SECRET_KEY", "dev-secret-must-be-32-chars-or-more")
 ORIGINS  = eval(os.getenv("ORIGINS", '["http://localhost:5173"]'))
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 TOKEN_TTL = float(os.getenv("TOKEN_TTL", 86400))
 NONCE_TTL = float(os.getenv("NONCE_TTL", 300))
+EAS_CONTRACT = os.getenv("EAS_CONTRACT")
+EAS_SCHEMA = os.getenv("EAS_SCHEMA")
+EAS_PRIVATE_KEY = os.getenv("EAS_PRIVATE_KEY")
+EAS_FROM_ACCOUNT = os.getenv("EAS_FROM_ACCOUNT")
+EAS_CHAIN = os.getenv("EAS_CHAIN")
+
+eas = EAS.from_chain(
+    chain_name='optimism',
+    private_key=EAS_PRIVATE_KEY,
+    from_account=EAS_FROM_ACCOUNT,
+    rpc_url='https://mainnet.optimism.io',
+    contract_address=EAS_CONTRACT
+)
 
 nonces: Dict[str, float] = {} 
 
@@ -78,3 +93,26 @@ def _verify_token(token: Optional[str]) -> Optional[Dict]:
         return jwt.decode(token, SECRET, algorithms=[ALGORITHM])
     except JWTError:
         return None
+    
+async def create_attestation(type: str, address: str, id: str):
+    string_to_encode = type + "-" + id
+    bytes = keccak(text=string_to_encode)
+
+    result = eas.attest(
+        schema_uid=EAS_SCHEMA,
+        recipient=address,
+        data_values={
+            'types': ['bytes32'],
+            'values': [bytes]
+        },
+    )
+
+    raw_uid = result.receipt['logs'][0]['data']
+    uid = '0x' + raw_uid.hex()
+
+    return uid
+
+async def get_attestation(eas_uid: str):
+    result = eas.get_attestation(uid=eas_uid)
+    print(result)
+    return result

@@ -1,7 +1,8 @@
 from sqlmodel import Session, select
 from models import Evaluation
-import os, aiohttp
+import os, aiohttp, requests
 from dotenv import load_dotenv
+
 
 load_dotenv()
 
@@ -28,10 +29,10 @@ def calculate_submission_score(submission_id: str, session: Session) -> float:
     
     return round(average_score, 4)
 
-async def get_karma_data(karma_gap_id: str):
+async def get_karma_data(karma_id: str):
     milestone_list = []
     update_list = []
-    url = os.getenv("KARMA_GAP_API") + karma_gap_id
+    url = os.getenv("KARMA_GAP_API") + karma_id
     
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
@@ -55,3 +56,8 @@ async def get_karma_data(karma_gap_id: str):
                 }
             else:
                 raise Exception(f"Failed to fetch Karma GAP data with status {response.status}")
+
+def check_karma_id(karma_id: str):
+    url = os.getenv("KARMA_GAP_API") + karma_id
+    response = requests.get(url, timeout=10)
+    return response.status_code

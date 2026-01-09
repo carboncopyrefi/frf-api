@@ -73,7 +73,7 @@ class EvaluationAnswer(EvaluationAnswerBase):
 class SubmissionBase(BaseSchema):
     project_id: str
     project_name: str
-    karma_gap_id: str
+    karma_id: str
     category: str
 
 class EvaluationCreateForSubmission(BaseSchema):
@@ -83,6 +83,7 @@ class EvaluationCreateForSubmission(BaseSchema):
 class SubmissionCreate(SubmissionBase):
     answers: List[SubmissionAnswerCreate]
     owner: str
+    eas_uid: str
 
 class SubmissionUpdate(SubmissionBase):
     pass
@@ -97,6 +98,7 @@ class Submission(SubmissionInDBBase):
     evaluations: List["Evaluation"] = []
     category: Category
     owner: str
+    eas_uid: str
 
     class Config:
         from_attributes = True
@@ -108,6 +110,7 @@ class EvaluationBase(BaseSchema):
 
 class EvaluationCreate(EvaluationBase):
     answers: List[EvaluationAnswerCreate]
+    eas_uid: str
 
 class EvaluationUpdate(EvaluationBase):
     pass
@@ -119,6 +122,7 @@ class EvaluationInDBBase(EvaluationBase):
 
 class Evaluation(EvaluationInDBBase):
     answers: List[EvaluationAnswer] = []
+    eas_uid: str
 
     class Config:
         from_attributes = True

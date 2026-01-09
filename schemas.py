@@ -11,6 +11,9 @@ class KarmaData(BaseModel):
     project_details: dict
     updates: List[dict]
 
+class Attestation(BaseModel):
+    result: dict
+
 # Question Schemas
 class QuestionBase(BaseSchema):
     project_statement: str
@@ -46,7 +49,7 @@ class CategoryReadWithSubmissions(CategoryRead):
 class SubmissionBase(BaseSchema):
     project_id: str
     project_name: str
-    karma_gap_id: str
+    karma_id: str
     owner: Optional[str] = None
 
 class SubmissionAnswerCreate(BaseSchema):
@@ -56,6 +59,7 @@ class SubmissionAnswerCreate(BaseSchema):
 class SubmissionCreate(SubmissionBase):
     answers: List[SubmissionAnswerCreate]
     category: str
+    eas_uid: Optional[str] = None
 
 class SubmissionAnswerRead(BaseSchema):
     id: str
@@ -81,11 +85,13 @@ class EvaluationAnswerCreate(BaseSchema):
 
 class EvaluationCreate(EvaluationBase):
     answers: List[EvaluationAnswerCreate]
+    eas_uid: Optional[str] = None
 
 class EvaluationRead(EvaluationBase):
     id: str
     date_completed: Optional[datetime] = None
     score: Optional[float] = None
+    eas_uid: str
 
 class EvaluationAnswerRead(BaseSchema):
     id: str
@@ -103,12 +109,13 @@ class SubmissionRead(SubmissionBase):
     category: CategoryRead
     last_evaluation_date: Optional[datetime] | None
     evaluation_count: int | None
-    evaluations: List[EvaluationRead]
+    evaluations: List[EvaluationRead] | None
+    eas_uid: str
+    owner: str
 
 class SubmissionWithAnswersRead(SubmissionRead):
     answers: List[SubmissionAnswerRead]
     category: CategoryRead
     karma_data: Optional[KarmaData] = None
     past_submissions: List[PastSubmissionSummary] = []
-    owner: str
     evaluations: List[EvaluationRead]

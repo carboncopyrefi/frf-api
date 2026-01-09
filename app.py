@@ -12,6 +12,7 @@ from slowapi.errors import RateLimitExceeded
 from eth_account import Account
 from eth_utils import to_checksum_address
 from siwe import SiweMessage
+from onchain import create_attestation
 import traceback
 
 from onchain import ( NonceResp, VerifyReq, VerifyResp, SessionResp, _now, _clean_nonces, _new_nonce, _create_token, _verify_token, _role, nonces)
@@ -174,13 +175,15 @@ def get_category_by_slug(slug: str, request: Request):
             id=sid,
             project_id=sub["project_id"],
             project_name=sub["project_name"],
-            karma_gap_id=sub["karma_gap_id"],
+            karma_id=sub["karma_id"],
             date_completed=sub.get("date_completed"),
             score=sub.get("score"),
             category=category,
             last_evaluation_date=evals[0]["date_completed"] if evals else None,
             evaluation_count=len(evals),
             evaluations=evals,
+            eas_uid=sub['eas_uid'],
+            owner=sub['owner']
         ))
 
     return CategoryReadWithSubmissions(**category, submissions=submissions_out)
@@ -218,7 +221,19 @@ def get_questions(request: Request):
 # Submission Endpoints
 @app.post("/submission", response_model=SubmissionWithAnswersRead)
 @limiter.limit("5/minute")
-def create_submission_with_answers(request: Request, submission_data: SubmissionCreate = Body(...), owner: str = Depends(current_user),):
+async def create_submission_with_answers(request: Request, submission_data: SubmissionCreate = Body(...), owner: str = Depends(current_user),):
+    try:
+        check = utils.check_karma_id(submission_data.karma_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Error verifying Karma ID") from e
+
+    if check == 200:
+        pass
+    elif check == 404:
+        raise HTTPException(status_code=404, detail="Karma ID not found")
+    else:
+        raise HTTPException(status_code=500, detail="Error verifying Karma ID")
+    
     db = get_db()
     submissions_collection = get_submissions_collection()
     categories_collection = get_categories_collection()
@@ -241,21 +256,34 @@ def create_submission_with_answers(request: Request, submission_data: Submission
     # Create answers
     created_answers = []
     for answer_data in submission_data.answers:
+        if len(answer_data.answer or "") > 1800:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Answer for question {answer_data.question_id} exceeds 1800 characters."
+            )
         answer = SubmissionAnswer(
             id=str(uuid.uuid4()),
             question_id=answer_data.question_id,
             answer=answer_data.answer
         )
         created_answers.append(answer)
-    
+
+    sub_id = str(uuid.uuid4())
+    eas_uid = None
+    try:
+        eas_uid = await create_attestation(address=submission_data.owner, type="submission", id=sub_id)
+    except Exception as e:
+        print(f"Could not create attestation: {e}")
+
     # Create submission
     submission = Submission(
-        id=str(uuid.uuid4()),
+        id=sub_id,
         date_completed=datetime.now(timezone.utc),
         project_id=submission_data.project_id,
         project_name=submission_data.project_name,
-        karma_gap_id=submission_data.karma_gap_id,
+        karma_id=submission_data.karma_id,
         owner=submission_data.owner,
+        eas_uid=eas_uid,
         score=None,
         answers=created_answers,
         evaluations=[],
@@ -296,8 +324,9 @@ def create_submission_with_answers(request: Request, submission_data: Submission
         date_completed=created_submission['date_completed'],
         project_id=created_submission['project_id'],
         project_name=created_submission['project_name'],
-        karma_gap_id=created_submission['karma_gap_id'],
+        karma_id=created_submission['karma_id'],
         owner=created_submission['owner'],
+        eas_uid=created_submission['eas_uid'],
         score=created_submission['score'],
         answers=answers_with_questions,
         category=Category(**created_submission['category']),
@@ -309,7 +338,7 @@ def create_submission_with_answers(request: Request, submission_data: Submission
 
 @app.get("/submissions/{submission_id}", response_model=SubmissionWithAnswersRead)
 @limiter.limit("20/minute")
-async def get_submission(submission_id: str, request: Request):
+async def get_submission(submission_id: str, request: Request, karma: bool = False):
     db = get_db()
     submissions_collection = get_submissions_collection()
     questions_collection = get_questions_collection()
@@ -357,12 +386,15 @@ async def get_submission(submission_id: str, request: Request):
     else:
         answers_with_questions = []
 
-     # Get Karma GAP data
+     # Get Karma GAP data if karma bool is true
     karma_data = None
-    try:
-        karma_data = await utils.get_karma_data(submission['karma_gap_id'])
-    except Exception as e:
-        print(f"Warning: Could not fetch Karma GAP data: {e}")
+    if karma:
+        try:
+            karma_data = await utils.get_karma_data(submission['karma_id'])
+        except Exception as e:
+            print(f"Warning: Could not fetch Karma data: {e}")
+    else:
+        pass
     
     current_date = submission.get("date_completed")
     if current_date is None:            # safety – if the row has no date, return empty list
@@ -399,7 +431,7 @@ async def get_submission(submission_id: str, request: Request):
         date_completed=submission.get('date_completed'),
         project_id=submission['project_id'],
         project_name=submission["project_name"],
-        karma_gap_id=submission['karma_gap_id'],
+        karma_id=submission['karma_id'],
         owner=submission['owner'],
         score=submission.get('score', 0.0),
         answers=answers_with_questions,
@@ -409,6 +441,7 @@ async def get_submission(submission_id: str, request: Request):
         evaluation_count=evaluation_count,
         past_submissions=past_list,
         evaluations=evaluations,
+        eas_uid=submission['eas_uid']
     )
 
 @app.get("/projects/{slug}")
@@ -463,7 +496,7 @@ async def get_project_latest_submission(slug: str, request: Request):
 # Evaluation Endpoints (evaluator role required)
 @app.post("/evaluation", response_model=EvaluationWithAnswersRead)
 @limiter.limit("5/minute")
-def create_evaluation_with_answers( request: Request, evaluation_data: EvaluationCreate = Body(...), evaluator: str = Depends(require_evaluator)):
+async def create_evaluation_with_answers( request: Request, evaluation_data: EvaluationCreate = Body(...), evaluator: str = Depends(require_evaluator)):
     db = get_db()
     submissions_collection = get_submissions_collection()
     evaluations_collection = get_evaluations_collection()
@@ -510,14 +543,22 @@ def create_evaluation_with_answers( request: Request, evaluation_data: Evaluatio
         )
         created_answers.append(answer)
 
+    eval_id = str(uuid.uuid4())
+    eas_uid = None
+    try:
+        eas_uid = await create_attestation(address=evaluation_data.evaluator, type="evaluation", id=eval_id)
+    except Exception as e:
+        return e
+
     # Create evaluation
     evaluation = Evaluation(
-        id=str(uuid.uuid4()),
+        id=eval_id,
         date_completed=datetime.now(timezone.utc),
         evaluator=evaluation_data.evaluator,
         submission_id=evaluation_data.submission_id,
         score=calculated_score,
-        answers=created_answers
+        answers=created_answers,
+        eas_uid=eas_uid
     )
     
     # Add evaluation to submission
@@ -583,6 +624,7 @@ def create_evaluation_with_answers( request: Request, evaluation_data: Evaluatio
         date_completed=evaluation.date_completed,
         evaluator=evaluation.evaluator,
         submission_id=evaluation.submission_id,
+        eas_uid=evaluation.eas_uid,
         score=evaluation.score,
         answers=answers_with_questions
     )
@@ -686,6 +728,24 @@ def create_evaluation_with_answers( request: Request, evaluation_data: Evaluatio
     
 #     return result
 
+
+# KARMA ID check
+
+@app.get("/karma/{karma_id}")
+@limiter.limit("10/minute")
+def check_karma_id(karma_id: str, request: Request):
+    try:
+        check = utils.check_karma_id(karma_id)
+    except Exception as e:
+        return {"status": 500}
+
+    if check == 200:
+        return {"status": 200}
+    elif check == 404:
+        return {"status": 404}
+    else:
+        return {"status": 500}
+
 # Web3 authentication endpoints
 
 @app.post("/nonce", response_model=NonceResp)
@@ -700,8 +760,8 @@ async def verify(body: VerifyReq):
         message = SiweMessage.from_message(body.message)
         message.verify(signature=body.signature, domain=None)  # raises if bad
     except Exception as e:
-        print("VERIFY EXCEPTION:", e)
-        traceback.print_exc()
+        # print("VERIFY EXCEPTION:", e)
+        # traceback.print_exc()
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     # check nonce
