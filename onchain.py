@@ -114,5 +114,4 @@ async def create_attestation(type: str, address: str, id: str):
 
 async def get_attestation(eas_uid: str):
     result = eas.get_attestation(uid=eas_uid)
-    print(result)
     return result
