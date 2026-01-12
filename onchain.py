@@ -95,15 +95,12 @@ def _verify_token(token: Optional[str]) -> Optional[Dict]:
         return None
     
 async def create_attestation(type: str, address: str, id: str):
-    string_to_encode = type + "-" + id
-    bytes = keccak(text=string_to_encode)
-
     result = eas.attest(
         schema_uid=EAS_SCHEMA,
         recipient=address,
         data_values={
-            'types': ['bytes32'],
-            'values': [bytes]
+            'types': ['string', 'string'],
+            'values': [type, id]
         },
     )
 
